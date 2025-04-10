@@ -5,6 +5,7 @@ import os
 from PyPDF2 import PdfReader
 import google.generativeai as genai
 import io
+import re
 
 # Load environment variables
 load_dotenv()
@@ -26,21 +27,36 @@ You are a skill gap analyzer. Based on the resume and the job description, ident
 """
 
 PROMPT_MATCH_SCORE = """
-You are an advanced and Expert Applicant Tracking Score Software (ATS). Your task is to compare the uploaded resume against the provided job description.
+You are an advanced Applicant Tracking System (ATS). Your task is to analyze the candidate’s resume against the job description.
 
 Evaluate the following:
-1. Keyword match (skills, qualifications, job titles, technologies).
-2. Educational alignment.
-3. Relevant experience match.
-4. Certifications and achievements.
-5. Overall alignment with the job role.
+1. Keyword match (skills, tools, titles)
+2. Education and qualifications
+3. Relevant experience
+4. Certifications or achievements
 
-Based on the above criteria, calculate an **overall ATS Match Score** between 0 and 100 percent.
+Then, provide:
 
-Be accurate and strict, and show only:
-- The final ATS Match Score (out of 100) — nothing else.
+1. An **ATS Match Score** between 0 and 100.
+2. **Positive points** (at least 3)
+3. **Negative points** (at least 3)
 
-Also point the positive points and negative points in points.
+Follow this exact output format:
+---
+ATS Match Score: 87%
+
+Positive Points:
+- Strong experience with React.js
+- Relevant degree in Computer Science
+- Used many keywords from job description
+
+Negative Points:
+- Lacks required AWS certification
+- Only 1 year of work experience
+- Missing some soft skills
+
+---
+Be accurate and use the exact format. Don't add any extra explanation.
 """
 
 # Helper to extract PDF text
@@ -60,13 +76,35 @@ def get_gemini_response(input_text, resume_text, prompt):
     response = model.generate_content(content)
     return response.text
 
-def default_statement():
-    return "Welcome to Resumate Backend"
-# Endpoints
+# Parse Gemini output for ATS score
+def parse_gemini_output(text):
+    # Extract score
+    score_match = re.search(r'ATS Match Score\s*[:\-]?\s*(\d{1,3})\s*%', text, re.IGNORECASE)
+    score = int(score_match.group(1)) if score_match else None
 
-@app.route("/",methods=["GET"])
-def local_route():
-    return default_statement()
+    # Extract positive points
+    positive_match = re.search(r'Positive Points:\s*((?:- .+\n?)+)', text)
+    positives = positive_match.group(1).strip().split('\n') if positive_match else []
+
+    # Extract negative points
+    negative_match = re.search(r'Negative Points:\s*((?:- .+\n?)+)', text)
+    negatives = negative_match.group(1).strip().split('\n') if negative_match else []
+
+    # Clean the lines
+    positives = [p.lstrip("- ").strip() for p in positives]
+    negatives = [n.lstrip("- ").strip() for n in negatives]
+
+    return {
+        "score": score,
+        "positives": positives,
+        "negatives": negatives,
+        "type": "match"
+    }
+
+# Routes
+@app.route("/", methods=["GET"])
+def home():
+    return "Welcome to Resumate Backend!"
 
 @app.route("/analyze_resume", methods=["POST"])
 def analyze_resume():
@@ -89,16 +127,17 @@ def handle_request(prompt):
         if not job_description or not file:
             return jsonify({"error": "Missing job description or resume file"}), 400
 
-        # Read and extract resume text
         resume_text = extract_text_from_pdf(file.stream)
-
-        # Get Gemini response
         result = get_gemini_response(job_description, resume_text, prompt)
-        return jsonify({"response": result})
+
+        if prompt == PROMPT_MATCH_SCORE:
+            return jsonify(parse_gemini_output(result))
+        else:
+            return jsonify({"response": result})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Start server
+# Run server
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
