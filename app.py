@@ -118,6 +118,36 @@ def skill_gap():
 def match_score():
     return handle_request(PROMPT_MATCH_SCORE)
 
+@app.route('/generate-cover-letter', methods=['POST'])
+def generate_cover_letter():
+    if 'resume' not in request.files or 'job_description' not in request.form:
+        return jsonify({'error': 'Missing resume file or job description'}), 400
+
+    resume_file = request.files['resume']
+    job_description = request.form.get('job_description')
+
+    resume_text = extract_text_from_pdf(resume_file)
+
+    prompt = f"""
+    Generate a tailored, professional cover letter using the following resume and job description.
+
+    Resume:
+    {resume_text}
+
+    Job Description:
+    {job_description}
+
+    The cover letter should be concise (one page), highlight the candidate's most relevant skills and experiences,
+    and be ATS-friendly.
+    """
+
+    model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+    response = model.generate_content(prompt)
+    cover_letter = response.text.strip()
+
+    return jsonify({'cover_letter': cover_letter})
+
+
 # Core handler
 def handle_request(prompt):
     try:
