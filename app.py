@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 import os
 from PyPDF2 import PdfReader
 import google.generativeai as genai
-import io
 import re
+import json
 
 # Load environment variables
 load_dotenv()
@@ -27,36 +27,22 @@ You are a skill gap analyzer. Based on the resume and the job description, ident
 """
 
 PROMPT_MATCH_SCORE = """
-You are an advanced Applicant Tracking System (ATS). Your task is to analyze the candidate’s resume against the job description.
+You are an expert in resume screening and applicant tracking systems (ATS).
 
-Evaluate the following:
-1. Keyword match (skills, tools, titles)
-2. Education and qualifications
-3. Relevant experience
-4. Certifications or achievements
+Given a **job description** and a **resume**, perform the following tasks and return your response in **JSON format** like this:
 
-Then, provide:
+{
+  "ATS_Match_Score": <score out of 100>,
+  "Matching_Skills": [list of skills found in both],
+  "Missing_Skills": [list of skills found only in job description],
+  "Recommendations": [list of actionable recommendations to improve the score]
+}
 
-1. An **ATS Match Score** between 0 and 100.
-2. **Positive points** (at least 3)
-3. **Negative points** (at least 3)
+### Job Description:
+{job_description}
 
-Follow this exact output format:
----
-ATS Match Score: 87%
-
-Positive Points:
-- Strong experience with React.js
-- Relevant degree in Computer Science
-- Used many keywords from job description
-
-Negative Points:
-- Lacks required AWS certification
-- Only 1 year of work experience
-- Missing some soft skills
-
----
-Be accurate and use the exact format. Don't add any extra explanation.
+### Resume:
+{resume_text}
 """
 
 # Helper to extract PDF text
@@ -70,36 +56,21 @@ def extract_text_from_pdf(file_stream):
     return text
 
 # Gemini call
-def get_gemini_response(input_text, resume_text, prompt):
+def get_gemini_response(job_description, resume_text, prompt_template):
     model = genai.GenerativeModel(model_name="gemini-1.5-pro")
-    content = [input_text, resume_text, prompt]
-    response = model.generate_content(content)
+    formatted_prompt = prompt_template.format(
+        job_description=job_description,
+        resume_text=resume_text
+    )
+    response = model.generate_content(formatted_prompt)
     return response.text
 
-# Parse Gemini output for ATS score
-def parse_gemini_output(text):
-    # Extract score
-    score_match = re.search(r'ATS Match Score\s*[:\-]?\s*(\d{1,3})\s*%', text, re.IGNORECASE)
-    score = int(score_match.group(1)) if score_match else None
-
-    # Extract positive points
-    positive_match = re.search(r'Positive Points:\s*((?:- .+\n?)+)', text)
-    positives = positive_match.group(1).strip().split('\n') if positive_match else []
-
-    # Extract negative points
-    negative_match = re.search(r'Negative Points:\s*((?:- .+\n?)+)', text)
-    negatives = negative_match.group(1).strip().split('\n') if negative_match else []
-
-    # Clean the lines
-    positives = [p.lstrip("- ").strip() for p in positives]
-    negatives = [n.lstrip("- ").strip() for n in negatives]
-
-    return {
-        "score": score,
-        "positives": positives,
-        "negatives": negatives,
-        "type": "match"
-    }
+# Parse Gemini structured JSON response
+def parse_json_response(text):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"error": "Could not parse structured output from Gemini."}
 
 # Routes
 @app.route("/", methods=["GET"])
@@ -116,7 +87,7 @@ def skill_gap():
 
 @app.route("/match_score", methods=["POST"])
 def match_score():
-    return handle_request(PROMPT_MATCH_SCORE)
+    return handle_request(PROMPT_MATCH_SCORE, expect_json=True)
 
 @app.route('/generate-cover-letter', methods=['POST'])
 def generate_cover_letter():
@@ -147,9 +118,8 @@ def generate_cover_letter():
 
     return jsonify({'cover_letter': cover_letter})
 
-
 # Core handler
-def handle_request(prompt):
+def handle_request(prompt, expect_json=False):
     try:
         job_description = request.form.get("job_description")
         file = request.files.get("resume")
@@ -160,8 +130,8 @@ def handle_request(prompt):
         resume_text = extract_text_from_pdf(file.stream)
         result = get_gemini_response(job_description, resume_text, prompt)
 
-        if prompt == PROMPT_MATCH_SCORE:
-            return jsonify(parse_gemini_output(result))
+        if expect_json:
+            return jsonify(parse_json_response(result))
         else:
             return jsonify({"response": result})
 
